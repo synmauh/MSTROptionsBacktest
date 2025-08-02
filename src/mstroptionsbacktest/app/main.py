@@ -219,7 +219,13 @@ def monthly_roll(ib):
             c = Option(SYMBOL, next_exp, strike, "P", "SMART")
             tick = ib.reqMktData(c, "", False, False)
             ib.sleep(0.1)
-            mid = (tick.bid + tick.ask) / 2
+            mid = util.midpoint(tick.bid, tick.ask)
+            if mid is None:
+                ib.cancelMktData(tick)
+                print(
+                    f"[Monthly Roll] No market data for {next_exp} {strike}P; roll skipped"
+                )
+                return
             order = LimitOrder("SELL", 1, mid)
             ib.placeOrder(c, order)
             ib.cancelMktData(tick)
@@ -234,7 +240,13 @@ def weekly_roll(ib):
         if pos.contract.symbol == SYMBOL and pos.position < 0 and pos.contract.right == "P":
             tick = ib.reqMktData(pos.contract, "", False, False)
             ib.sleep(0.1)
-            mid = (tick.bid + tick.ask) / 2
+            mid = util.midpoint(tick.bid, tick.ask)
+            if mid is None:
+                ib.cancelMktData(tick)
+                print(
+                    f"[Weekly Roll] No market data for {pos.contract.localSymbol}; skip buy back"
+                )
+                continue
             buy = LimitOrder("BUY", abs(pos.position), mid)
             ib.placeOrder(pos.contract, buy)
             ib.cancelMktData(tick)
@@ -247,7 +259,13 @@ def weekly_roll(ib):
         c = Option(SYMBOL, expiry_7d, strike, "P", "SMART")
         tick = ib.reqMktData(c, "", False, False)
         ib.sleep(0.1)
-        mid = (tick.bid + tick.ask) / 2
+        mid = util.midpoint(tick.bid, tick.ask)
+        if mid is None:
+            ib.cancelMktData(tick)
+            print(
+                f"[Weekly Roll] No market data for {expiry_7d} {strike}P; roll skipped"
+            )
+            return
         sell = LimitOrder("SELL", 1, mid)
         ib.placeOrder(c, sell)
         ib.cancelMktData(tick)
