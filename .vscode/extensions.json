@@ -1,0 +1,61 @@
+// --------------------------------------------------------
+// Workspace recommendations
+//
+// You can disable all extensions globally by
+// F1 -> Extensions: Disable all installed extensions
+//
+// Then you can activate the following extensions
+// only for the current workspace:
+//
+// In extensions search bar enter "@recommended" to
+// get this list.
+// Press on the cloud to install all recommended extensions.
+//
+//
+// --------------------------------------------------------
+{
+    "recommendations": [
+        // ------------------------
+        // All projects
+        // ------------------------
+        "vscode-icons-team.vscode-icons",
+        "gruntfuggly.todo-tree",
+        "ms-vscode.hexeditor",
+        "medo64.render-crlf",
+        "streetsidesoftware.code-spell-checker",
+        //
+        // ------------------------
+        // Docker
+        // ------------------------
+        //"ms-azuretools.vscode-docker",
+        //
+        // ------------------------
+        // Python
+        // ------------------------
+        "ms-python.python",
+        "zhoufeng.pyqt-integration",
+        //"ms-python.debugpy", // TOBECHECKED_IF_SHALL_BE_INCLUDED
+        //"ms-python.vscode-pylance", // TOBECHECKED_IF_SHALL_BE_INCLUDED
+        "njpwerner.autodocstring",
+        //"ms-python.black-formatter", // TOBECHECKED_IF_SHALL_BE_INCLUDED
+        //"donjayamanne.python-environment-manager", // TOBECHECKED_IF_SHALL_BE_INCLUDED
+        //"donjayamanne.python-extension-pack", // TOBECHECKED_IF_SHALL_BE_INCLUDED
+        //"kevinrose.vsc-python-indent", // TOBECHECKED_IF_SHALL_BE_INCLUDED
+        "charliermarsh.ruff", // WE CHECK BOTH (Sonarlint and Ruff) AND LATER CHOOSE THE BETTER ONE
+        //
+        // ------------------------
+        // Jinja
+        // ------------------------
+        "samuelcolvin.jinjahtml",
+        //
+        // ------------------------
+        // XML
+        // ------------------------
+        //"redhat.vscode-xml" // TOBECHECKED_IF_SHALL_BE_INCLUDED (only include if XML is used)
+        //
+        // ------------------------
+        // TOML
+        // ------------------------
+        "tamasfe.even-better-toml",
+    ]
+}

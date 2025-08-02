@@ -1,0 +1,25 @@
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = ["ALL"]
+ignore = [
+    "C901",   # complex-structure - we allow complex stuff
+    "SIM108", # if-else-block-instead-of-if-exp - allow if-then-else for better readability
+    "S311",   # suspicious-non-cryptographic-random-usage - allow standard random functions
+    "EM101",  # ignore TODO explanation
+    "TRY003", # ignore TODO explanation
+    "TD002",  # missing author of TODO
+    "TD003",  # missing issue link on the line following this TODO
+    "FIX002", # Line contains TODO, consider resolving the issue (is handled via TODO tree)
+    "SIM102", # Use a single `if` statement instead of nested `if` statements
+    "RET504", # Unnecessary assignment before `return` statement
+    "TRY400", # Use `logging.exception` instead of `logging.error`
+]
+
+[lint.pylint]
+max-branches = 20
+max-args = 7
+
+[format]
+docstring-code-format = true

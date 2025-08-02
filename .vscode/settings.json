@@ -1,0 +1,161 @@
+// --------------------------------------------------------
+// Workspace settings
+// Only change if you know what you are doing
+// --------------------------------------------------------
+{
+    // --------------------------------
+    // Global vscode settings
+    // --------------------------------
+    "workbench.tree.indent": 32,
+    //
+    "editor.insertSpaces": true,
+    "editor.rulers": [
+        120
+    ],
+    //
+    "extensions.ignoreRecommendations": true,
+    "extensions.showRecommendationsOnlyOnDemand": true,
+    //
+    "files.trimTrailingWhitespace": true,
+    "files.trimTrailingWhitespaceInRegexAndStrings": true,
+    //
+    "terminal.integrated.defaultProfile.windows": "Command Prompt",
+    "terminal.integrated.scrollback": 10000,
+    //
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/.pytest_cache": true
+    },
+    "[python]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false,
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll": "explicit",
+            "source.organizeImports": "explicit"
+        },
+    },
+    "[feature, yaml]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false
+    },
+    // --------------------------------
+    // Extension settings
+    // --------------------------------
+    //
+    // Ext: zhoufeng.pyqt-integration
+    "pyqt-integration.qtdesigner.path": "..\\.venv\\Lib\\site-packages\\qt5_applications\\Qt\\bin\\designer.exe",
+    "pyqt-integration.pyrcc.cmd": ".venv\\Scripts\\pyrcc5.exe",
+    "pyqt-integration.pyuic.cmd": "..\\.venv\\Scripts\\pyuic5.exe",
+    "pyqt-integration.pyrcc.compile.filepath": "${qrc_name}Res.py",
+    "pyqt-integration.pyuic.compile.filepath": "${qrc_name}Ui.py",
+    "pyqt-integration.pyuic.compile.addOptions": "--resource-suffix=Res",
+    //
+    // --------------------------------
+    // @ext:njpwerner.autodocstring
+    // same configuration in pyproject.toml
+    "autoDocstring.docstringFormat": "sphinx-notypes",
+    //
+    // @ext: medo64.render-crlf
+    "code-eol.decorateBeforeEol": true,
+    "code-eol.highlightExtraWhitespace": true,
+    "code-eol.highlightNonDefault": true,
+    "code-eol.forceShowOnWordWrap": true,
+    //"code-eol.newlineCharacter": "¬",
+    //"code-eol.returnCharacter": "¤",
+    //"code-eol.crlfCharacter": "¤¬",
+    //
+    // --------------------------------
+    // @ext:ms-python.vscode-pylance
+    "python.analysis.typeCheckingMode": "standard",
+    "python.analysis.autoImportCompletions": true,
+    //
+    // --------------------------------
+    // @ext: Python testing
+    "python.testing.pytestArgs": [
+        "."
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    //
+    // --------------------------------
+    // @ext: sonarsource.sonarlint.vscode (attention - rule options must be copied to user settings)
+    "sonarlint.disableTelemetry": true,
+    "sonarlint.analysisExcludesStandalone": "*.json",
+    //
+    // --------------------------------
+    // @ext:Gruntfuggly.todo-tree
+    "todo-tree.general.tags": [
+        "NOTE",
+        "REVIEW",
+        "TODO",
+        "CHECKME",
+        "FIXME",
+        "BUG",
+    ],
+    "todo-tree.filtering.excludeGlobs": [
+        "spelling-words.txt"
+    ],
+    "todo-tree.highlights.defaultHighlight": {
+        "gutterIcon": true,
+        "type": "text-and-comment"
+    },
+    "todo-tree.highlights.customHighlight": {
+        // See https://microsoft.github.io/vscode-codicons/dist/codicon.html for avalable icon defs.
+        "NOTE": {
+            "foreground": "#2983f0",
+            "icon": "note"
+        },
+        "REVIEW": {
+            "foreground": "#ff00d9",
+            "icon": "pulse"
+        },
+        "TODO": {
+            "foreground": "#00D235ff",
+            "icon": "checklist"
+        },
+        "CHECKME": {
+            "foreground": "#00D235ff",
+            "icon": "question"
+        },
+        "FIXME": {
+            "foreground": "#b09001ff"
+        },
+        "BUG": {
+            "foreground": "#f04b29ff"
+        }
+    },
+    //
+    // --------------------------------
+    // @ext:streetsidesoftware.code-spell-checker
+    "cSpell.words": [], // oerride user-level spell directories
+    "cSpell.ignoreWords": [], // oerride user-level spell directories
+    "cSpell.diagnosticLevel": "Information",
+    "cSpell.spellCheckOnlyWorkspaceFiles": true,
+    "cSpell.ignorePaths": [
+        "package-lock.json",
+        "node_modules",
+        "vscode-extension",
+        ".git/{info,lfs,logs,refs,objects}/**",
+        ".git/{index,*refs,*HEAD}",
+        ".vscode",
+        ".vscode-insiders",
+        "uv.lock",
+        "requirements.txt",
+        "architecture.drawio",
+        "*.toml"
+    ],
+    "cSpell.customDictionaries": {
+        "project-words": {
+            "name": "Project spelling directory",
+            "path": "${workspaceRoot}/.vscode/dictionary_project.txt",
+            "description": "Words used in this project",
+            "addWords": true
+        },
+        "custom": true, // Enable the `custom` dictionary
+        "internal-terms": false // Disable the `internal-terms` dictionary
+    },
+}

@@ -1,0 +1,23 @@
+{
+    // Copy this to c:\Users\USERNAME\AppData\Roaming\Code\User\
+    "sonarlint.rules": {
+        "python:S100": {
+            "level": "off"
+        },
+        "python:S116": {
+            "level": "off"
+        },
+        "python:S117": {
+            "level": "off"
+        },
+        "python:S1135": { // Complete the task associated to this "TODO" comment (is handled via TODO tree)
+            "level": "off"
+        },
+        "python:S1542": {
+            "level": "off"
+        },
+        "python:S3776": { // Refactor this function to reduce its Cognitive Complexity from x to to the 15 allowed.
+            "level": "off"
+        }
+    }
+}

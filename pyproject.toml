@@ -1,0 +1,17 @@
+[project]
+name            = "MSTROptionBacktest"
+dynamic         = ["version"]
+description     = "MSTROptionBacktest"
+readme          = "readme.md"
+requires-python = "==3.11.10"
+
+dependencies = [
+    "requests==2.32.3",
+    "pandas",
+    "ib_insync",
+]
+
+[dependency-groups]
+dev = [
+    "types-lxml==2025.3.30",
+]
