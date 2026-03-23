@@ -59,6 +59,8 @@ DATA_MODE = 1  # 1:live, 2:frozen, 3:delayed, 4:delayed frozen
 
 DB_PATH = "iv_tracker.db"
 
+DEBUG_ALWAYS_GET_DATA = True
+
 
 # -----------------------------------------------------------------------------
 # -- Classes
@@ -99,23 +101,21 @@ class TrackedOptionPosition:
 
 
 @dataclass(slots=True)
-class UnderlyingSnapshot:
-    timestamp_utc : datetime
-    symbol        : str
-    price_mid     : float
-
-
-@dataclass(slots=True)
 class OptionSnapshot:
-    timestamp_utc : datetime
-    symbol        : str
-    con_id        : int
-    local_symbol  : str
-    expiry        : str
-    strike        : float
-    right         : str
-    option_price  : float | None
-    iv            : float | None
+    timestamp_utc          : datetime
+    symbol                 : str
+    con_id                 : int
+    local_symbol           : str
+    expiry                 : str
+    strike                 : float
+    right                  : str
+    option_price           : float | None
+    iv                     : float | None
+    delta                  : float | None
+    underlying_price       : float | None
+    underlying_iv30        : float | None
+    underlying_iv_rank_13w : float | None
+    underlying_iv_rank_52w : float | None
 
 
 # -----------------------------------------------------------------------------
@@ -128,7 +128,8 @@ def connect_ib() -> IB:
     if not ib.isConnected():
         raise ConnectionError("Could not connect to IBKR")
 
-    ib.reqMarketDataType(DATA_MODE)
+    market_data_mode = 2 if DEBUG_ALWAYS_GET_DATA else DATA_MODE
+    ib.reqMarketDataType(market_data_mode)
 
     logger.info("Connected to IBKR: %s:%s clientId=%s", IB_HOST, IB_PORT, CLIENT_ID)
     return ib
@@ -275,17 +276,6 @@ def _has_useful_underlying_data(ticker: Ticker) -> bool:
 # -----------------------------------------------------------------------------
 #
 # -----------------------------------------------------------------------------
-def _has_useful_option_iv_data(ticker: Ticker) -> bool:
-    return (
-        ticker.modelGreeks is not None
-        and ticker.modelGreeks.impliedVol is not None
-        and not math.isnan(ticker.modelGreeks.impliedVol)
-    )
-
-
-# -----------------------------------------------------------------------------
-#
-# -----------------------------------------------------------------------------
 def get_open_mstr_call_positions(ib: IB) -> list[TrackedOptionPosition]:
     positions = ib.positions()
     result: list[TrackedOptionPosition] = []
@@ -374,50 +364,12 @@ def get_mid_price(ticker: Ticker) -> float | None:
 # -----------------------------------------------------------------------------
 #
 # -----------------------------------------------------------------------------
-def get_underlying_snapshot(ib: IB, timestamp_utc: datetime) -> UnderlyingSnapshot | None:
-    contract            = Stock(SYMBOL, "SMART", "USD")
-    qualified_contracts = ib.qualifyContracts(contract)
-
-    if not qualified_contracts:
-        logger.warning("Could not qualify underlying contract for %s", SYMBOL)
-        return None
-
-    contract = qualified_contracts[0]
-    ticker   = ib.reqMktData(contract, "", snapshot=False, regulatorySnapshot=False)
-
-    try:
-        deadline = time.monotonic() + 10.0
-
-        while time.monotonic() < deadline:
-            if _has_useful_underlying_data(ticker):
-                break
-            ib.sleep(0.5)
-
-        price_mid = get_mid_price(ticker)
-
-        if price_mid is None:
-            logger.warning("No usable underlying price received for %s", SYMBOL)
-            return None
-
-        logger.info("Underlying snapshot %s mid=%s", SYMBOL, price_mid)
-
-        return UnderlyingSnapshot(
-            timestamp_utc = timestamp_utc,
-            symbol        = SYMBOL,
-            price_mid     = price_mid,
-        )
-
-    finally:
-        ib.cancelMktData(contract)
-
-
-# -----------------------------------------------------------------------------
-#
-# -----------------------------------------------------------------------------
 def get_option_snapshot(
-    ib            : IB,
-    position      : TrackedOptionPosition,
-    timestamp_utc : datetime,
+    ib               : IB,
+    position         : TrackedOptionPosition,
+    timestamp_utc    : datetime,
+    underlying_price : float | None,
+    underlying_iv30  : float | None,
 ) -> OptionSnapshot | None:
     #
     # Search correct contract
@@ -453,45 +405,55 @@ def get_option_snapshot(
         deadline = time.monotonic() + 10.0
 
         iv           : float | None = None
+        delta        : float | None = None
         option_price : float | None = None
 
         has_valid_iv    = False
         has_valid_price = False
+        has_valid_delta = False
 
         # Wait for data
         while time.monotonic() < deadline:
             # Get IV
             if ticker.modelGreeks is not None:
-                iv = ticker.modelGreeks.impliedVol
+                iv    = ticker.modelGreeks.impliedVol
+                delta = ticker.modelGreeks.delta
 
             # Get price
             option_price = get_mid_price(ticker)
 
             has_valid_iv    = _is_valid_number(iv)
+            has_valid_delta = _is_valid_number(delta)
             has_valid_price = option_price is not None
 
-            if has_valid_iv and has_valid_price:
+            if has_valid_iv and has_valid_price and has_valid_delta:
                 break
 
             ib.sleep(0.5)
 
         logger.info(
-            "Option snapshot %s price=%s iv=%s",
+            "Option snapshot %s price=%s delta=%s iv=%s",
             position.local_symbol,
             option_price,
+            delta,
             iv,
         )
 
         return OptionSnapshot(
-            timestamp_utc = timestamp_utc,
-            symbol        = position.symbol,
-            con_id        = position.con_id,
-            local_symbol  = position.local_symbol,
-            expiry        = position.expiry,
-            strike        = position.strike,
-            right         = position.right,
-            option_price  = option_price if has_valid_price else None,
-            iv            = iv if has_valid_iv else None,
+            timestamp_utc          = timestamp_utc,
+            symbol                 = position.symbol,
+            con_id                 = position.con_id,
+            local_symbol           = position.local_symbol,
+            expiry                 = position.expiry,
+            strike                 = position.strike,
+            right                  = position.right,
+            option_price           = option_price if has_valid_price else None,
+            iv                     = iv if has_valid_iv else None,
+            delta                  = delta if has_valid_delta else None,
+            underlying_price       = underlying_price,
+            underlying_iv30        = underlying_iv30,
+            underlying_iv_rank_13w = None,
+            underlying_iv_rank_52w = None,
         )
 
     finally:
@@ -506,17 +468,6 @@ def init_db(db_path: str) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS underlying_snapshots (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp_utc TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                price_mid REAL NOT NULL
-            )
-            """,
-        )
-
-        conn.execute(
-            """
             CREATE TABLE IF NOT EXISTS option_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp_utc TEXT NOT NULL,
@@ -527,7 +478,12 @@ def init_db(db_path: str) -> None:
                 strike REAL NOT NULL,
                 right TEXT NOT NULL,
                 option_price REAL,
-                iv REAL
+                iv REAL,
+                delta REAL,
+                underlying_price REAL,
+                underlying_iv30 REAL,
+                underlying_iv_rank_13w REAL,
+                underlying_iv_rank_52w REAL
             )
             """,
         )
@@ -545,30 +501,51 @@ def init_db(db_path: str) -> None:
 # -----------------------------------------------------------------------------
 #
 # -----------------------------------------------------------------------------
-def save_underlying_snapshot(db_path: str, snapshot: UnderlyingSnapshot) -> None:
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            """
-            INSERT INTO underlying_snapshots (
-                timestamp_utc,
-                symbol,
-                price_mid
-            )
-            VALUES (?, ?, ?)
-            """,
-            (
-                snapshot.timestamp_utc.isoformat(),
-                snapshot.symbol,
-                snapshot.price_mid,
-            ),
+def get_underlying_market_data(
+    ib: IB,
+) -> tuple[float | None, float | None]:
+    contract = Stock(SYMBOL, "SMART", "USD")
+    #
+    # Get contract
+    qualified_contracts = ib.qualifyContracts(contract)
+
+    if not qualified_contracts:
+        logger.warning("Could not qualify underlying contract for %s", SYMBOL)
+        return None, None
+
+    contract = qualified_contracts[0]
+
+    # 106 = underlying implied volatility
+    ticker = ib.reqMktData(contract, "106", snapshot=False, regulatorySnapshot=False)
+
+    try:
+        deadline = time.monotonic() + 10.0
+
+        underlying_price : float | None = None
+        underlying_iv30  : float | None = None
+
+        while time.monotonic() < deadline:
+            underlying_price = get_mid_price(ticker)
+
+            if _is_valid_number(ticker.impliedVolatility):
+                underlying_iv30 = ticker.impliedVolatility
+
+            if underlying_price is not None and underlying_iv30 is not None:
+                break
+
+            ib.sleep(0.5)
+
+        logger.info(
+            "Underlying market data %s price=%s iv=%s",
+            SYMBOL,
+            underlying_price,
+            underlying_iv30,
         )
 
-    logger.info(
-        "Saved underlying snapshot: symbol=%s price_mid=%s ts=%s",
-        snapshot.symbol,
-        snapshot.price_mid,
-        snapshot.timestamp_utc.isoformat(),
-    )
+        return underlying_price, underlying_iv30
+
+    finally:
+        ib.cancelMktData(contract)
 
 
 # -----------------------------------------------------------------------------
@@ -591,9 +568,14 @@ def save_option_snapshots(db_path: str, snapshots: list[OptionSnapshot]) -> None
                 strike,
                 right,
                 option_price,
-                iv
+                iv,
+                delta,
+                underlying_price,
+                underlying_iv30,
+                underlying_iv_rank_13w,
+                underlying_iv_rank_52w
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -606,6 +588,11 @@ def save_option_snapshots(db_path: str, snapshots: list[OptionSnapshot]) -> None
                     snapshot.right,
                     snapshot.option_price,
                     snapshot.iv,
+                    snapshot.delta,
+                    snapshot.underlying_price,
+                    snapshot.underlying_iv30,
+                    snapshot.underlying_iv_rank_13w,
+                    snapshot.underlying_iv_rank_52w,
                 )
                 for snapshot in snapshots
             ],
@@ -627,11 +614,7 @@ def get_utc_now() -> datetime:
 def collect_and_save_market_data_cycle(ib: IB, db_path: str) -> None:
     timestamp_utc = get_utc_now()
 
-    underlying_snapshot = get_underlying_snapshot(ib, timestamp_utc)
-    if underlying_snapshot is not None:
-        save_underlying_snapshot(db_path, underlying_snapshot)
-    else:
-        logger.warning("Skipping underlying DB save because no snapshot was available")
+    underlying_price, underlying_iv30 = get_underlying_market_data(ib)
 
     positions = get_open_mstr_call_positions(ib)
 
@@ -642,7 +625,13 @@ def collect_and_save_market_data_cycle(ib: IB, db_path: str) -> None:
     option_snapshots: list[OptionSnapshot] = []
 
     for position in positions:
-        snapshot = get_option_snapshot(ib, position, timestamp_utc)
+        snapshot = get_option_snapshot(
+            ib,
+            position,
+            timestamp_utc,
+            underlying_price,
+            underlying_iv30,
+        )
         if snapshot is not None:
             option_snapshots.append(snapshot)
 
@@ -660,38 +649,41 @@ def test_db_write(db_path: str) -> None:
 
     test_ts = get_utc_now()
 
-    underlying_snapshot  = UnderlyingSnapshot(
-        timestamp_utc    = test_ts,
-        symbol           = "MSTR",
-        price_mid        = 301.25,
-    )
-
     option_snapshots = [
         OptionSnapshot(
-            timestamp_utc = test_ts,
-            symbol        = "MSTR",
-            con_id        = 123456789,
-            local_symbol  = "MSTR  260424C00195000",
-            expiry        = "20260424",
-            strike        = 195.0,
-            right         = "C",
-            option_price  = 110.50,
-            iv            = 0.62,
+            timestamp_utc          = test_ts,
+            symbol                 = "MSTR",
+            con_id                 = 123456789,
+            local_symbol           = "MSTR  260424C00195000",
+            expiry                 = "20260424",
+            strike                 = 195.0,
+            right                  = "C",
+            option_price           = 110.50,
+            iv                     = 0.62,
+            delta                  = 0.123,
+            underlying_price       = 301.25,
+            underlying_iv30        = 0.55,
+            underlying_iv_rank_13w = None,
+            underlying_iv_rank_52w = None,
         ),
         OptionSnapshot(
-            timestamp_utc = test_ts,
-            symbol        = "MSTR",
-            con_id        = 123456790,
-            local_symbol  = "MSTR  260516C00200000",
-            expiry        = "20260516",
-            strike        = 200.0,
-            right         = "C",
-            option_price  = 105.25,
-            iv            = 0.58,
+            timestamp_utc          = test_ts,
+            symbol                 = "MSTR",
+            con_id                 = 123456789,
+            local_symbol           = "MSTR  260424C00195000",
+            expiry                 = "20260424",
+            strike                 = 195.0,
+            right                  = "C",
+            option_price           = 110.50,
+            iv                     = 0.62,
+            delta                  = 0.123,
+            underlying_price       = 301.25,
+            underlying_iv30        = 0.55,
+            underlying_iv_rank_13w = None,
+            underlying_iv_rank_52w = None,
         ),
     ]
 
-    save_underlying_snapshot(db_path, underlying_snapshot)
     save_option_snapshots(db_path, option_snapshots)
 
     logger.info("Database write test finished successfully")
@@ -735,20 +727,25 @@ def run_market_loop(ib: IB) -> None:
     schedule = get_mstr_market_schedule(ib)
 
     while True:
-        state = check_market_state(schedule)
+        state      = check_market_state(schedule)
+        should_run = state.is_open or DEBUG_ALWAYS_GET_DATA
 
-        if state.is_open:
+        if should_run:
             next_run = get_next_quarter_hour(state.now_local)
 
+            mode_text = "market-open mode" if state.is_open else "debug-frozen mode"
             logger.info(
-                "Market is open. Next run at %s",
+                "Scheduler active in %s. Next run at %s",
+                mode_text,
                 next_run.isoformat(),
             )
 
             sleep_until(ib, next_run)
 
             state = check_market_state(schedule)
-            if not state.is_open:
+
+            should_run = state.is_open or DEBUG_ALWAYS_GET_DATA
+            if not should_run:
                 logger.info("Market closed before scheduled run, skipping cycle")
                 continue
 
