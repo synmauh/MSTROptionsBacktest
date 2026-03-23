@@ -1,0 +1,40 @@
+version: 1
+
+formatters:
+    standard:
+        class: logging.ColoredFormatter
+        format: "%(asctime)s %(name)-22s %(levelname)9s: %(message)s"
+    simple:
+        format: "%(asctime)s %(name)-22s %(levelname)9s: %(message)s"
+
+handlers:
+    console:
+        class: logging.StreamHandler
+        formatter: standard
+        stream: ext://sys.stdout
+
+    logfile:
+        class: logging.FileHandler
+        formatter: simple
+        filename: 'application.log'
+        mode: 'a'
+
+root:
+    #handlers: [console, logfile]
+    handlers: [console]
+    propagate: yes
+    level: DEBUG
+
+# Available Logging Levels:
+# CRITICAL - 40
+# ERROR    - 40
+# WARNING  - 30
+# INFO     - 20
+# DEBUG    - 10
+loggers:
+    __main__:
+        level: DEBUG
+        propagate: yes
+    ib_insync:
+        level: WARNING
+        propagate: yes

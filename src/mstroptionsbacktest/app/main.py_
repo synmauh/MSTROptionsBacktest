@@ -1,0 +1,207 @@
+import os
+from datetime import datetime, timedelta
+
+import pandas as pd
+from ib_insync import IB, LimitOrder, Option, util
+
+# === CONFIGURATION ===
+IB_HOST = "127.0.0.1"
+IB_PORT = 4002  # paper TWS/Gateway default
+CLIENT_ID = 123  # unique integer per session
+SYMBOL = "MSTR"
+EXCEL_FILE = "mstr_options_eod.xlsx"
+
+# Your earnings dates here (YYYY, M, D)
+EARNINGS_DATES = [
+    datetime(2025, 1, 16).date(),
+    datetime(2025, 4, 17).date(),
+    # ... add the rest
+]
+
+
+# === IB CONNECTION ===
+def connect_ib():
+    ib = IB()
+    ib.connect(IB_HOST, IB_PORT, clientId=CLIENT_ID, readonly=True)
+    # 2 = frozen (end-of-day) market data
+    ib.reqMarketDataType(2)
+    return ib
+
+
+# === FETCH OPTION CHAIN ===
+def fetch_option_contracts(ib):
+    details = ib.reqContractDetails(Option(SYMBOL, "", 0.0, "P", "SMART"))
+    contracts = []
+    for d in details:
+        c = d.contract
+        contracts.append(
+            Option(
+                SYMBOL,
+                c.lastTradeDateOrContractMonth,
+                c.strike,
+                c.right,
+                "SMART",
+                tradingClass=c.tradingClass,
+            ),
+        )
+    return contracts
+
+
+# === SEGMENTED EOD MIDPOINT FETCH ===
+def fetch_eod_midpoint(ib, contract, start_date, end_date):
+    dfs = []
+    seg_start = start_date
+    while seg_start <= end_date:
+        # Determine segment length (max 365 days)
+        remaining = (end_date - seg_start).days + 1
+        seg_days = min(365, remaining)
+        duration = f"{seg_days} D"
+        seg_end = seg_start + timedelta(days=seg_days - 1)
+
+        bars = ib.reqHistoricalData(
+            contract,
+            endDateTime=seg_end.strftime("%Y%m%d 23:59:59"),
+            durationStr=duration,
+            barSizeSetting="1 day",
+            whatToShow="MIDPOINT",  # only EODChart supported for options
+            useRTH=True,
+            formatDate=1,
+        )
+        df = util.df(bars)
+        if not df.empty:
+            df["date"] = pd.to_datetime(df["date"]).dt.date
+            dfs.append(df)
+        # Advance to next segment
+        seg_start = seg_end + timedelta(days=1)
+    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+
+
+# === UPDATE EOD DATA ===
+def update_eod_data(ib):
+    # Load or init
+    if os.path.exists(EXCEL_FILE):
+        master_df = pd.read_excel(EXCEL_FILE, engine="openpyxl")
+    else:
+        master_df = pd.DataFrame(
+            columns=[
+                "contract",
+                "expiry",
+                "strike",
+                "right",
+                "date",
+                "mid",
+                "volume",
+            ],
+        )
+
+    if not master_df.empty:
+        last_date = master_df["date"].max()
+        start_date = last_date + timedelta(days=1)
+    else:
+        start_date = datetime.today().date() - timedelta(days=730)
+    end_date = datetime.today().date()
+
+    contracts = fetch_option_contracts(ib)
+    new_rows = []
+
+    for c in contracts:
+        df = fetch_eod_midpoint(ib, c, start_date, end_date)
+        if df.empty:
+            continue
+        df["contract"] = c.localSymbol
+        df["expiry"] = c.lastTradeDateOrContractMonth
+        df["strike"] = c.strike
+        df["right"] = c.right
+        df["mid"] = df["close"]
+        df["volume"] = df["volume"]
+        new_rows.append(df[["contract", "expiry", "strike", "right", "date", "mid", "volume"]])
+
+    if new_rows:
+        df_new = pd.concat(new_rows, ignore_index=True)
+        master_df = pd.concat([master_df, df_new], ignore_index=True)
+        master_df.drop_duplicates(subset=["contract", "date"], inplace=True)
+        master_df.sort_values(["contract", "date"], inplace=True)
+        master_df.to_excel(EXCEL_FILE, index=False, engine="openpyxl")
+        print(f"Appended {len(df_new)} rows to {EXCEL_FILE}")
+    else:
+        print("No new EOD data to append.")
+
+
+# === ASSIGNMENT & DELTA HELPERS ===
+def check_assigned(ib, date):
+    # TODO: implement via ib.reqExecutions or trade history
+    return False
+
+
+def find_delta_strike(ib, expiry, target_delta=0.10, right="P"):
+    chain = ib.reqSecDefOptParams(SYMBOL, "", SYMBOL, "")
+    params = next(p for p in chain if p.exchange == "SMART" and p.tradingClass)
+    for K in sorted(params.strikes):
+        c = Option(SYMBOL, expiry, K, right, "SMART")
+        tick = ib.reqMktData(c, "", False, False)
+        ib.sleep(0.1)
+        if tick.modelGreeks and abs(tick.modelGreeks.delta) >= target_delta:
+            ib.cancelMktData(tick)
+            return K
+        ib.cancelMktData(tick)
+    return None
+
+
+# === MONTHLY ROLL ===
+def monthly_roll(ib):
+    today = datetime.today().date()
+    prev = max((d for d in EARNINGS_DATES if d <= today), default=None)
+    if prev and check_assigned(ib, prev):
+        next_exp = (prev + timedelta(days=30)).strftime("%Y%m%d")
+        strike = find_delta_strike(ib, next_exp)
+        if strike:
+            c = Option(SYMBOL, next_exp, strike, "P", "SMART")
+            tick = ib.reqMktData(c, "", False, False)
+            ib.sleep(0.1)
+            mid = (tick.bid + tick.ask) / 2
+            order = LimitOrder("SELL", 1, mid)
+            ib.placeOrder(c, order)
+            ib.cancelMktData(tick)
+            print(f"[Monthly Roll] Sold 1 {next_exp} {strike}P @ {mid}")
+
+
+# === WEEKLY ROLL ===
+def weekly_roll(ib):
+    today = datetime.today().date()
+    # close existing short puts
+    for pos in ib.positions():
+        if pos.contract.symbol == SYMBOL and pos.position < 0 and pos.contract.right == "P":
+            tick = ib.reqMktData(pos.contract, "", False, False)
+            ib.sleep(0.1)
+            mid = (tick.bid + tick.ask) / 2
+            buy = LimitOrder("BUY", abs(pos.position), mid)
+            ib.placeOrder(pos.contract, buy)
+            ib.cancelMktData(tick)
+            print(f"[Weekly Roll] Bought back {pos.contract.localSymbol} @ {mid}")
+    # sell new 7DTE 10Δ
+    expiry_7d = (today + timedelta(days=7)).strftime("%Y%m%d")
+    strike = find_delta_strike(ib, expiry_7d)
+    if strike:
+        c_new = Option(SYMBOL, expiry_7d, strike, "P", "SMART")
+        tick = ib.reqMktData(c_new, "", False, False)
+        ib.sleep(0.1)
+        mid_new = (tick.bid + tick.ask) / 2
+        sell = LimitOrder("SELL", 1, mid_new)
+        ib.placeOrder(c_new, sell)
+        ib.cancelMktData(tick)
+        print(f"[Weekly Roll] Sold 1 {expiry_7d} {strike}P @ {mid_new}")
+
+
+# === MAIN ===
+def main():
+    ib = connect_ib()
+    try:
+        update_eod_data(ib)
+        monthly_roll(ib)
+        weekly_roll(ib)
+    finally:
+        ib.disconnect()
+
+
+if __name__ == "__main__":
+    main()

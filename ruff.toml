@@ -15,6 +15,10 @@ ignore = [
     "SIM102", # Use a single `if` statement instead of nested `if` statements
     "RET504", # Unnecessary assignment before `return` statement
     "TRY400", # Use `logging.exception` instead of `logging.error`
+
+    # Temporary
+    "D101", # Missing docstring
+    "D103", # Missing docstring
 ]
 
 [lint.pylint]

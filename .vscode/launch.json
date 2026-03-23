@@ -29,7 +29,7 @@
             "name": "🐍💻 App entry point",
             "type": "debugpy",
             "request": "launch",
-            "module": "mstroptionsbacktest.app.main",
+            "module": "src.mstroptionsbacktest.app.ivtracker",
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [],

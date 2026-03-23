@@ -42,6 +42,7 @@
         //"donjayamanne.python-extension-pack", // TOBECHECKED_IF_SHALL_BE_INCLUDED
         //"kevinrose.vsc-python-indent", // TOBECHECKED_IF_SHALL_BE_INCLUDED
         "charliermarsh.ruff", // WE CHECK BOTH (Sonarlint and Ruff) AND LATER CHOOSE THE BETTER ONE
+        "emeraldwalk.runonsave",
         //
         // ------------------------
         // Jinja
