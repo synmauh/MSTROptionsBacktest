@@ -495,6 +495,25 @@ def init_db(db_path: str) -> None:
             """,
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sent_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                con_id INTEGER NOT NULL,
+                signal_type TEXT NOT NULL,
+                turning_point_time_utc TEXT,
+                sent_at_utc TEXT NOT NULL
+            )
+            """,
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_sent_alerts_lookup
+            ON sent_alerts (con_id, signal_type, turning_point_time_utc)
+            """,
+        )
+
     logger.info("Database initialized: %s", db_path)
 
 

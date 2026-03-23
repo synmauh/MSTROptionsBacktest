@@ -26,10 +26,25 @@
         // Main launch configurations
         // -----------------------------------------------------------------
         {
-            "name": "🐍💻 App entry point",
+            "name": "🐍💻 IV Tracker",
             "type": "debugpy",
             "request": "launch",
             "module": "src.mstroptionsbacktest.app.ivtracker",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [],
+            "presentation": {
+                "group": "app"
+            }
+        },
+        // -----------------------------------------------------------------
+        // Main launch configurations
+        // -----------------------------------------------------------------
+        {
+            "name": "🐍💻 IV Analyzer",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.mstroptionsbacktest.app.ivanalyzer",
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [],

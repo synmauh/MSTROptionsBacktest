@@ -1,6 +1,8 @@
 executemany
 IBKR
 insync
+ivtracker
+lookback
 Markus
 MSTR
 Schiffweiler
