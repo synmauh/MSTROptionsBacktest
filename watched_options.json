@@ -1,0 +1,23 @@
+
+{
+  "options": [
+    {
+      "symbol": "MSTR",
+      "expiry": "20260501",
+      "strike": 180,
+      "right": "C",
+      "exchange": "SMART",
+      "currency": "USD",
+      "multiplier": "100"
+    },
+    {
+      "symbol": "MSTR",
+      "expiry": "20260501",
+      "strike": 190,
+      "right": "C",
+      "exchange": "SMART",
+      "currency": "USD",
+      "multiplier": "100"
+    }
+  ]
+}

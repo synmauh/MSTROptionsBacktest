@@ -30,12 +30,16 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+
 # -----------------------------------------------------------------------------
 # -- custom module import
 # -----------------------------------------------------------------------------
 from src.logger import configure_logger
 
-from .ivtracker import DB_PATH, get_utc_now
+from .ivtracker import DB_PATH, SYMBOL, get_utc_now
 
 # -----------------------------------------------------------------------------
 # -- logging
@@ -48,7 +52,12 @@ logger = logging.getLogger(__name__)
 # -- Constants
 # -----------------------------------------------------------------------------
 
-EMAIL_ENABLED = False
+ANALYZE_INTERVAL_MINUTES = 5
+
+LOOKBACK_DAYS = 7
+SHOW_CHARTS   = True
+
+EMAIL_ENABLED = True
 
 SMTP_HOST     = "mail.lan.synergetik.de"
 SMTP_PORT     = 25
@@ -84,6 +93,20 @@ class IvExtremumSignal:
     turning_point_time_utc : datetime | None
     sample_count           : int
     reason                 : str
+
+
+@dataclass(slots=True)
+class IvChartSeries:
+    local_symbol : str
+    times        : list[datetime]
+    ivs          : list[float]
+
+
+# -----------------------------------------------------------------------------
+# Globals
+# -----------------------------------------------------------------------------
+
+_chart_figure: Figure | None = None
 
 
 # -----------------------------------------------------------------------------
@@ -171,6 +194,50 @@ def load_iv_series_for_contract(
         )
 
     return result
+
+
+# -----------------------------------------------------------------------------
+#
+# -----------------------------------------------------------------------------
+def load_chart_rows_for_contracts(
+    db_path       : str,
+    con_ids       : list[int],
+    lookback_days : int = LOOKBACK_DAYS,
+) -> list[tuple[str, int, str, float | None, float | None]]:
+    if not con_ids:
+        return []
+
+    threshold_utc    = get_utc_now() - timedelta(days=lookback_days)
+    placeholder_list = ", ".join("?" for _ in con_ids)
+
+    query = f"""
+        SELECT
+            timestamp_utc,
+            con_id,
+            local_symbol,
+            iv,
+            underlying_price
+        FROM option_snapshots
+        WHERE con_id IN ({placeholder_list})
+        AND timestamp_utc >= ?
+        ORDER BY timestamp_utc ASC, con_id ASC
+    """  # noqa: S608
+
+    params: list[object] = [*con_ids, threshold_utc.isoformat()]
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+
+    return [
+        (
+            str(row[0]),
+            int(row[1]),
+            str(row[2]),
+            float(row[3]) if row[3] is not None else None,
+            float(row[4]) if row[4] is not None else None,
+        )
+        for row in rows
+    ]
 
 
 # -----------------------------------------------------------------------------
@@ -361,7 +428,7 @@ def detect_iv_extremum_for_series(
 def analyze_active_contracts_from_db(
     db_path               : str,
     active_within_minutes : int = 60,
-    lookback_days         : int = 7,
+    lookback_days         : int = LOOKBACK_DAYS,
 ) -> list[IvExtremumSignal]:
     active_contract_ids       = get_active_contract_ids_from_db(
         db_path               = db_path,
@@ -425,13 +492,148 @@ def log_iv_analysis_results(signals: list[IvExtremumSignal]) -> None:
 # -----------------------------------------------------------------------------
 #
 # -----------------------------------------------------------------------------
+def show_iv_chart_for_active_contracts(
+    db_path               : str,
+    active_within_minutes : int = 60,
+    lookback_days         : int = LOOKBACK_DAYS,
+) -> None:
+    global _chart_figure
+
+    active_contract_ids       = get_active_contract_ids_from_db(
+        db_path               = db_path,
+        active_within_minutes = active_within_minutes,
+    )
+
+    if not active_contract_ids:
+        logger.info("No active contracts available for chart")
+        return
+
+    rows              = load_chart_rows_for_contracts(
+        db_path       = db_path,
+        con_ids       = active_contract_ids,
+        lookback_days = lookback_days,
+    )
+
+    if not rows:
+        logger.info("No chart data available in the selected lookback window")
+        return
+
+    underlying_points     : dict[datetime, float] = {}
+    iv_series_by_contract : dict[int, IvChartSeries] = {}
+
+    for timestamp_str, con_id, local_symbol, iv_value, underlying_price in rows:
+        timestamp_utc = datetime.fromisoformat(timestamp_str)
+
+        # Store underlying price only once per timestamp
+        if underlying_price is not None and timestamp_utc not in underlying_points:
+            underlying_points[timestamp_utc] = underlying_price
+
+        # Create per-contract IV series container
+        if con_id not in iv_series_by_contract:
+            iv_series_by_contract[con_id]  = IvChartSeries(
+                local_symbol               = local_symbol,
+                times                      = [],
+                ivs                        = [],
+            )
+
+        # Append IV point only if valid
+        if iv_value is not None:
+            iv_series_by_contract[con_id].times.append(timestamp_utc)
+            iv_series_by_contract[con_id].ivs.append(iv_value)
+
+    if _chart_figure is None or not plt.fignum_exists(_chart_figure.number):
+        _chart_figure, ax_underlying = plt.subplots()
+    else:
+        _chart_figure.clear()
+        ax_underlying = _chart_figure.add_subplot(111)
+
+    ax_iv = ax_underlying.twinx()
+
+    # Plot underlying only once
+    underlying_values: list[float] = []
+    if underlying_points:
+        underlying_times     = sorted(underlying_points.keys())
+        underlying_values    = [underlying_points[ts] for ts in underlying_times]
+        underlying_times_num = mdates.date2num(underlying_times)
+
+        ax_underlying.plot(
+            underlying_times_num,
+            underlying_values,
+            label     = SYMBOL,
+            linewidth = 3.0,
+            color     = "black",
+        )
+        ax_underlying.set_ylabel("Underlying Price")
+
+        underlying_min = min(underlying_values)
+        underlying_max = max(underlying_values)
+        if (underlying_max - underlying_min) < 10.0:
+            center = (underlying_max + underlying_min) / 2.0
+            ax_underlying.set_ylim(center - 5.0, center + 5.0)
+
+    # Plot IV lines for all active contracts
+    plotted_iv_count = 0
+    all_iv_values: list[float] = []
+
+    for series in iv_series_by_contract.values():
+        if not series.times:
+            continue
+
+        times_num = mdates.date2num(series.times)
+        ax_iv.plot(times_num, series.ivs, label=series.local_symbol)
+        all_iv_values.extend(series.ivs)
+        plotted_iv_count += 1
+
+    ax_iv.set_ylabel("Implied Volatility")
+
+    if all_iv_values:
+        iv_min = min(all_iv_values)
+        iv_max = max(all_iv_values)
+        if (iv_max - iv_min) < 0.2:
+            center = (iv_max + iv_min) / 2.0
+            ax_iv.set_ylim(center - 0.1, center + 0.1)
+
+    ax_underlying.set_xlabel(f"Time (last {lookback_days} days)")
+    ax_underlying.set_title(f"{SYMBOL} underlying and option IVs")
+
+    # Format x-axis as datetime
+    ax_underlying.xaxis_date()
+    ax_underlying.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M"))
+
+    # Build one combined legend
+    handles_underlying, labels_underlying = ax_underlying.get_legend_handles_labels()
+    handles_iv, labels_iv                 = ax_iv.get_legend_handles_labels()
+
+    if handles_underlying or handles_iv:
+        ax_underlying.legend(
+            handles_underlying + handles_iv,
+            labels_underlying + labels_iv,
+            loc="best",
+        )
+
+    _chart_figure.autofmt_xdate()
+    _chart_figure.tight_layout()
+    _chart_figure.canvas.draw()
+    _chart_figure.canvas.flush_events()
+    plt.pause(0.001)
+
+    logger.info(
+        "Displayed IV chart with %d active contracts and %d underlying points",
+        plotted_iv_count,
+        len(underlying_points),
+    )
+
+
+# -----------------------------------------------------------------------------
+#
+# -----------------------------------------------------------------------------
 def test_iv_extremum_analysis(db_path: str) -> None:
     logger.info("Starting IV extremum analysis test")
 
     signals                   = analyze_active_contracts_from_db(
         db_path               = db_path,
         active_within_minutes = 60,
-        lookback_days         = 7,
+        lookback_days         = LOOKBACK_DAYS,
     )
 
     log_iv_analysis_results(signals)
@@ -447,6 +649,13 @@ def test_iv_extremum_analysis(db_path: str) -> None:
     )
 
     send_email_alerts_for_signals(db_path, signals)
+
+    if SHOW_CHARTS:
+        show_iv_chart_for_active_contracts(
+            db_path               = db_path,
+            active_within_minutes = 60,
+            lookback_days         = LOOKBACK_DAYS,
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -623,11 +832,65 @@ def mark_alert_as_sent(
 
 
 # -----------------------------------------------------------------------------
+#
+# -----------------------------------------------------------------------------
+def get_next_analysis_time(dt: datetime) -> datetime:
+    if dt.second == 0 and dt.microsecond == 0 and dt.minute % ANALYZE_INTERVAL_MINUTES == 0:
+        return dt
+
+    dt_floor  = dt.replace(second=0, microsecond=0)
+    remainder = dt_floor.minute % ANALYZE_INTERVAL_MINUTES
+
+    if remainder == 0:
+        return dt_floor + timedelta(minutes=ANALYZE_INTERVAL_MINUTES)
+
+    return dt_floor + timedelta(minutes=(ANALYZE_INTERVAL_MINUTES - remainder))
+
+
+# -----------------------------------------------------------------------------
+#
+# -----------------------------------------------------------------------------
+def sleep_until(target_dt: datetime) -> None:
+    while True:
+        now     = datetime.now(target_dt.tzinfo)
+        seconds = (target_dt - now).total_seconds()
+
+        if seconds <= 0:
+            return
+
+        plt.pause(min(seconds, 0.5))
+
+
+# -----------------------------------------------------------------------------
+#
+# -----------------------------------------------------------------------------
+def run_analyzer_loop(db_path: str) -> None:
+    logger.info("Starting analyzer loop with interval=%d minutes", ANALYZE_INTERVAL_MINUTES)
+
+    logger.info("Starting immediate analyzer cycle at %s", get_utc_now().isoformat())
+    test_iv_extremum_analysis(db_path)
+
+    while True:
+        now      = get_utc_now()
+        next_run = get_next_analysis_time(now)
+
+        logger.info("Next analyzer run at %s", next_run.isoformat())
+        sleep_until(next_run)
+
+        logger.info("Starting analyzer cycle at %s", get_utc_now().isoformat())
+        test_iv_extremum_analysis(db_path)
+
+
+# -----------------------------------------------------------------------------
 # -- main
 # -----------------------------------------------------------------------------
 def main() -> None:
     # test_email_alert()
-    test_iv_extremum_analysis(DB_PATH)
+    # test_iv_extremum_analysis(DB_PATH)
+    plt.ion()
+    plt.show(block=False)
+
+    run_analyzer_loop(DB_PATH)
 
 
 # -----------------------------------------------------------------------------

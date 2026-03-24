@@ -23,6 +23,7 @@ __copyright__ = "Synergetik GmbH"
 # -----------------------------------------------------------------------------
 
 
+import json
 import logging
 import math
 import sqlite3
@@ -59,7 +60,10 @@ DATA_MODE = 1  # 1:live, 2:frozen, 3:delayed, 4:delayed frozen
 
 DB_PATH = "iv_tracker.db"
 
-DEBUG_ALWAYS_GET_DATA = True
+WATCHED_OPTIONS_PATH = "watched_options.json"
+
+FETCH_INTERVAL_MINUTES = 15
+DEBUG_ALWAYS_GET_DATA  = False
 
 
 # -----------------------------------------------------------------------------
@@ -220,22 +224,32 @@ def _parse_ib_hours_range(
     part    : str,
     tz_name : str,
 ) -> tuple[datetime, datetime] | None:
+    # Length
+    HHMM_LENGTH = 4  # noqa: N806
+
+    # Remove surrounding whitespace from one IBKR schedule segment
     part = part.strip()
 
+    # Ignore empty segments
     if not part:
         return None
 
+    # Split "YYYYMMDD:HHMM-..." into date part and hour range part
     date_part, hours_part = part.split(":", maxsplit=1)
     hours_part            = hours_part.strip()
 
+    # IBKR uses CLOSED for non-trading days
     if hours_part == "CLOSED":
         return None
 
+    # Split the hour range into start and end string
     start_str, end_str = hours_part.split("-", maxsplit=1)
 
-    start_raw = f"{date_part}{start_str}" if len(start_str) == 4 else start_str
-    end_raw = f"{date_part}{end_str}" if len(end_str) == 4 else end_str
+    # If IBKR only gives HHMM, prepend the date part
+    start_raw = f"{date_part}{start_str}" if len(start_str) == HHMM_LENGTH else start_str
+    end_raw = f"{date_part}{end_str}" if len(end_str) == HHMM_LENGTH else end_str
 
+    # Convert both timestamps into timezone-aware datetimes
     return (
         _parse_ib_local_datetime(start_raw, tz_name),
         _parse_ib_local_datetime(end_raw, tz_name),
@@ -314,6 +328,137 @@ def get_open_mstr_call_positions(ib: IB) -> list[TrackedOptionPosition]:
         )
 
     logger.info("Found %d open MSTR call positions", len(result))
+    return result
+
+
+# -----------------------------------------------------------------------------
+#
+# -----------------------------------------------------------------------------
+def _tracked_option_key(position: TrackedOptionPosition) -> tuple[str, str, float, str]:
+    return (
+        position.symbol,
+        position.expiry,
+        position.strike,
+        position.right,
+    )
+
+
+# -----------------------------------------------------------------------------
+#
+# -----------------------------------------------------------------------------
+def load_watched_option_positions(
+    ib          : IB,
+    config_path : str,
+) -> list[TrackedOptionPosition]:
+    try:
+        with open(config_path, encoding="utf-8") as file:
+            config = json.load(file)
+    except FileNotFoundError:
+        logger.info("Watched options file not found: %s", config_path)
+        return []
+    except json.JSONDecodeError as ex:
+        logger.error("Invalid JSON in watched options file %s: %s", config_path, ex)
+        return []
+
+    raw_options = config.get("options", [])
+    if not isinstance(raw_options, list):
+        logger.error("Invalid watched options file format: 'options' must be a list")
+        return []
+
+    result: list[TrackedOptionPosition] = []
+
+    for idx, entry in enumerate(raw_options):
+        if not isinstance(entry, dict):
+            logger.warning("Skipping watched option entry %d because it is not an object", idx)
+            continue
+
+        try:
+            symbol     = str(entry["symbol"])
+            expiry     = str(entry["expiry"])
+            strike     = float(entry["strike"])
+            right      = str(entry["right"]).upper()
+            exchange   = str(entry.get("exchange", "SMART"))
+            currency   = str(entry.get("currency", "USD"))
+            multiplier = str(entry.get("multiplier", "100"))
+        except (KeyError, TypeError, ValueError) as ex:
+            logger.warning("Skipping invalid watched option entry %d: %s", idx, ex)
+            continue
+
+        contract                         = Option(
+            symbol                       = symbol,
+            lastTradeDateOrContractMonth = expiry,
+            strike                       = strike,
+            right                        = right,
+            exchange                     = exchange,
+            multiplier                   = multiplier,
+            currency                     = currency,
+        )
+
+        qualified_contracts = ib.qualifyContracts(contract)
+
+        if not qualified_contracts:
+            logger.warning(
+                "Could not qualify watched option: symbol=%s expiry=%s strike=%s right=%s",
+                symbol,
+                expiry,
+                strike,
+                right,
+            )
+            continue
+
+        qualified_contract = qualified_contracts[0]
+
+        result.append(
+            TrackedOptionPosition(
+                account       = "WATCHLIST",
+                con_id        = qualified_contract.conId,
+                symbol        = qualified_contract.symbol,
+                exchange      = qualified_contract.exchange,
+                currency      = qualified_contract.currency,
+                local_symbol  = qualified_contract.localSymbol,
+                trading_class = qualified_contract.tradingClass,
+                expiry        = qualified_contract.lastTradeDateOrContractMonth,
+                strike        = qualified_contract.strike,
+                right         = qualified_contract.right,
+                multiplier    = qualified_contract.multiplier,
+                position      = 0.0,
+                avg_cost      = 0.0,
+            ),
+        )
+
+    logger.info("Loaded %d watched options from %s", len(result), config_path)
+    return result
+
+
+# -----------------------------------------------------------------------------
+#
+# -----------------------------------------------------------------------------
+def get_tracked_option_positions(ib: IB) -> list[TrackedOptionPosition]:
+    portfolio_positions = get_open_mstr_call_positions(ib)
+    watched_positions   = load_watched_option_positions(ib, WATCHED_OPTIONS_PATH)
+
+    merged: dict[tuple[str, str, float, str], TrackedOptionPosition] = {}
+
+    for position in portfolio_positions:
+        merged[_tracked_option_key(position)] = position
+
+    for position in watched_positions:
+        key = _tracked_option_key(position)
+
+        if key in merged:
+            continue
+
+        merged[key] = position
+
+    result = list(merged.values())
+
+    logger.info(
+        "Tracking %d option contracts total (%d portfolio + %d watched)",
+        len(result),
+        len(portfolio_positions),
+        len(watched_positions),
+    )
+
     return result
 
 
@@ -635,10 +780,10 @@ def collect_and_save_market_data_cycle(ib: IB, db_path: str) -> None:
 
     underlying_price, underlying_iv30 = get_underlying_market_data(ib)
 
-    positions = get_open_mstr_call_positions(ib)
+    positions = get_tracked_option_positions(ib)
 
     if not positions:
-        logger.info("No open MSTR call positions found")
+        logger.info("No tracked option contracts found")
         return
 
     option_snapshots: list[OptionSnapshot] = []
@@ -712,17 +857,16 @@ def test_db_write(db_path: str) -> None:
 #
 # -----------------------------------------------------------------------------
 def get_next_quarter_hour(dt: datetime) -> datetime:
-    schedule_time = 1
-    if dt.second == 0 and dt.microsecond == 0 and dt.minute % schedule_time == 0:
+    if dt.second == 0 and dt.microsecond == 0 and dt.minute % FETCH_INTERVAL_MINUTES == 0:
         return dt
 
     dt_floor  = dt.replace(second=0, microsecond=0)
-    remainder = dt_floor.minute % schedule_time
+    remainder = dt_floor.minute % FETCH_INTERVAL_MINUTES
 
     if remainder == 0:
-        return dt_floor + timedelta(minutes=schedule_time)
+        return dt_floor + timedelta(minutes=FETCH_INTERVAL_MINUTES)
 
-    return dt_floor + timedelta(minutes=(schedule_time - remainder))
+    return dt_floor + timedelta(minutes=(FETCH_INTERVAL_MINUTES - remainder))
 
 
 # -----------------------------------------------------------------------------
